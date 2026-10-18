@@ -4,7 +4,6 @@ const PREP_METHODS = ['직접 조리', '밀키트·냉동식품', '남은 음식
 const PREPARERS = ['아내', '남편'];
 const CLEANUP_OPTIONS = ['아내', '남편', '함께', '아직 안 함', '설거지 없음'];
 const ALCOHOL_KEY = 'meal-log-alcohol-v1';
-const REASONS = ['야근·늦은 귀가', '약속·외출', '각자 따로 먹음', '식사를 거름', '기타'];
 const MEAL_NAMES = { breakfast: '아침', lunch: '점심', dinner: '저녁' };
 const CALENDAR_MEALS = ['breakfast', 'lunch', 'dinner'];
 const CALENDAR_LETTERS = { breakfast: 'B', lunch: 'L', dinner: 'D' };
@@ -157,7 +156,7 @@ function mealCard(date, meal) {
   let content = '';
   if (record.mode === '집에서 먹음') {
     content = dishes.length ? dishes.map(dish => `<div class="dish-summary-line"><strong>${escapeHTML(dish.name)}</strong><span>${escapeHTML(dish.prep)}${dish.preparedBy ? ` · ${escapeHTML(dish.preparedBy)}` : ''}</span></div>`).join('') : '<strong>메뉴 미입력</strong>';
-  } else if (record.mode === '먹지 않음') content = record.memberDetails ? '' : `이유 · ${escapeHTML(record.reason || '미입력')}`;
+  } else if (record.mode === '먹지 않음') content = '';
   else if (record.mode === '외식') content = `<div class="dish-summary-line"><strong>${escapeHTML(record.outsideMenu || '메뉴 미입력')}</strong></div><span>장소 · ${escapeHTML(record.place || '미입력')}</span>`;
   else content = escapeHTML(record.mode);
   const cleanup = record.mode === '집에서 먹음' && record.dishwasher ? `<div class="calendar-extra">설거지 · ${escapeHTML(record.dishwasher)}</div>` : '';
@@ -177,7 +176,7 @@ function memberMealSummary(record) {
   const rows = ['아내', '남편'].filter(person => !ateWithSharedMeal[person]).map(person => {
     const detail = record.memberDetails[person];
     if (!detail) return '';
-    const value = detail.ate ? (detail.food || '따로 먹음') : `먹지 않음 · ${detail.reason || '이유 미입력'}`;
+    const value = detail.ate ? (detail.food || '따로 먹음') : '먹지 않음';
     return `<div><strong>${person}</strong><span>${escapeHTML(value)}</span></div>`;
   }).join('');
   return rows ? `<div class="member-meal-summary">${rows}</div>` : '';
@@ -219,15 +218,27 @@ function calendarMealDetail(date, meal) {
   let content = '';
   if (record.mode === '집에서 먹음') content = dishes.map(dish => `<div class="dish-summary-line"><strong>${escapeHTML(dish.name)}</strong><span>${escapeHTML(dish.prep)}${dish.preparedBy ? ` · ${escapeHTML(dish.preparedBy)}` : ''}</span></div>`).join('') || '<strong>메뉴 미입력</strong>';
   else if (record.mode === '외식') content = `<div class="dish-summary-line"><strong>${escapeHTML(record.outsideMenu || '메뉴 미입력')}</strong></div><span>장소 · ${escapeHTML(record.place || '미입력')}</span>`;
-  else content = record.memberDetails ? '' : `이유 · ${escapeHTML(record.reason || '미입력')}`;
+  else content = '';
   const cleanup = record.mode === '집에서 먹음' && record.dishwasher ? `<div class="calendar-extra">설거지 · ${escapeHTML(record.dishwasher)}</div>` : '';
   return `<article class="meal-card"><div class="meal-card-top"><div><div class="meal-name">${MEAL_NAMES[meal]}</div><div class="meal-time">${escapeHTML(record.mode)}</div></div><span class="meal-status">기록 완료</span></div>${content ? `<div class="meal-content">${content}</div>` : ''}${memberMealSummary(record)}${cleanup}</article>`;
 }
 
 function rangeDates() {
   const now = new Date(), end = toISO(now);
-  if (summaryRange === 'week') { const start = new Date(now); start.setDate(start.getDate() - 6); return { start: toISO(start), end }; }
-  if (summaryRange === 'month') return { start: toISO(new Date(now.getFullYear(), now.getMonth(), 1)), end };
+  if (summaryRange === 'today') return { start: end, end };
+  if (summaryRange === 'week') {
+    const weekStart = new Date(now);
+    weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
+    const monday = toISO(weekStart);
+    const firstRecordedDate = Object.keys(records).map(key => key.slice(0, 10)).sort()[0];
+    const firstTrackedWeek = firstRecordedDate && firstRecordedDate >= monday && firstRecordedDate <= end;
+    return { start: firstTrackedWeek ? firstRecordedDate : monday, end };
+  }
+  if (summaryRange === 'month') {
+    const monthStart = toISO(new Date(now.getFullYear(), now.getMonth(), 1));
+    const firstRecordedDate = Object.keys(records).map(key => key.slice(0, 10)).filter(date => date >= monthStart && date <= end).sort()[0];
+    return { start: firstRecordedDate || monthStart, end };
+  }
   return { start: '0000-01-01', end };
 }
 function countMealSlots(start, end) {
@@ -247,34 +258,47 @@ function renderSummary() {
   const home = entries.filter(entry => entry.mode === '집에서 먹음');
   const out = entries.filter(entry => entry.mode === '외식');
   const allDishes = home.flatMap(entry => dishRows(entry));
-  const qualifyingHomeDishes = entry => dishRows(entry).filter(dish => ['직접 조리', '밀키트·냉동식품'].includes(dish.prep));
-  const userPreparedMeals = home.filter(entry => qualifyingHomeDishes(entry).some(dish => dish.preparedBy === '아내')).length;
-  const husbandPreparedMeals = home.filter(entry => qualifyingHomeDishes(entry).some(dish => dish.preparedBy === '남편')).length;
+  const isRamen = dish => /라면/i.test(dish.name);
+  const dishesForMealPrepCount = entry => {
+    const dishes = dishRows(entry);
+    const hasOtherMenu = dishRows(entry).some(dish => !isRamen(dish));
+    return dishes.filter(dish => !isRamen(dish) || !hasOtherMenu);
+  };
+  const userPreparedMeals = home.filter(entry => {
+    const dishes = dishesForMealPrepCount(entry);
+    return dishes.length > 0 && dishes.every(dish => dish.preparedBy === '아내');
+  }).length;
+  const husbandPreparedMeals = home.filter(entry => {
+    const dishes = dishesForMealPrepCount(entry);
+    return dishes.length > 0 && dishes.every(dish => dish.preparedBy === '남편');
+  }).length;
   const sharedPreparedMeals = home.filter(entry => {
-    const people = new Set(qualifyingHomeDishes(entry).map(dish => dish.preparedBy));
-    return people.has('아내') && people.has('남편');
+    const people = new Set(dishesForMealPrepCount(entry).map(dish => dish.preparedBy));
+    return people.has('함께') || (people.has('아내') && people.has('남편'));
   }).length;
   const countPrep = prep => allDishes.filter(dish => dish.prep === prep).length;
   const deliveryCount = countPrep('배달·포장');
   const firstRecordedDate = entries.length ? entries.map(entry => entry.date).sort()[0] : null;
   const periodStart = summaryRange === 'all' ? firstRecordedDate : start;
   const totalMealSlots = countMealSlots(periodStart, end);
-  $('#summary-period').textContent = summaryRange === 'all' ? (entries.length ? `${dateLabel(firstRecordedDate)}부터 오늘까지` : '아직 기록이 없어요') : `${dateLabel(start)} — ${dateLabel(end)}`;
-  $('#summary-cards').innerHTML = `<div class="stat-card featured"><div class="stat-label">아내가 준비에 참여한 끼니</div><div class="stat-value">${userPreparedMeals}<small> / ${totalMealSlots}끼</small></div></div><div class="stat-card"><div class="stat-label">남편이 준비에 참여한 끼니</div><div class="stat-value">${husbandPreparedMeals}<small> / ${totalMealSlots}끼</small></div></div><div class="stat-card"><div class="stat-label">함께 준비한 끼니</div><div class="stat-value">${sharedPreparedMeals}<small>끼</small></div></div><div class="stat-card"><div class="stat-label">직접 조리한 메뉴</div><div class="stat-value">${countPrep('직접 조리')}<small>개</small></div></div><div class="stat-card"><div class="stat-label">배달·포장 메뉴</div><div class="stat-value">${deliveryCount}<small>개</small></div></div><div class="stat-card"><div class="stat-label">외식 끼니</div><div class="stat-value">${out.length}<small>끼</small></div></div>`;
+  $('#summary-period').textContent = summaryRange === 'all' ? (entries.length ? `${dateLabel(firstRecordedDate)}부터 오늘까지` : '아직 기록이 없어요') : summaryRange === 'today' ? dateLabel(start, true) : `${dateLabel(start)} — ${dateLabel(end)}`;
+  $('#summary-cards').innerHTML = `<div class="summary-stat-group shared-group"><div class="stat-card featured"><div class="stat-label">함께 준비한 끼니</div><div class="stat-value">${sharedPreparedMeals}<small>끼</small></div></div></div><div class="summary-stat-group participation-group"><div class="stat-card"><div class="stat-label">아내가 준비한 끼니</div><div class="stat-value">${userPreparedMeals}<small> / ${totalMealSlots}끼</small></div></div><div class="stat-card"><div class="stat-label">남편이 준비한 끼니</div><div class="stat-value">${husbandPreparedMeals}<small> / ${totalMealSlots}끼</small></div></div></div><div class="summary-stat-group method-group"><div class="stat-card"><div class="stat-label">직접 조리</div><div class="stat-value">${countPrep('직접 조리')}<small>개</small></div></div><div class="stat-card"><div class="stat-label">배달·포장</div><div class="stat-value">${deliveryCount}<small>개</small></div></div><div class="stat-card"><div class="stat-label">외식</div><div class="stat-value">${out.length}<small>끼</small></div></div></div>`;
   const cleanupCounts = {};
   entries.filter(entry => entry.mode === '집에서 먹음' && entry.dishwasher).forEach(entry => { cleanupCounts[entry.dishwasher] = (cleanupCounts[entry.dishwasher] || 0) + 1; });
   $('#dishwashing-summary').innerHTML = rankHTML(cleanupCounts, '설거지 담당 기록이 아직 없어요');
   const dishCounts = {};
   allDishes.filter(dish => !['밀키트·냉동식품', '남은 음식'].includes(dish.prep)).forEach(dish => { dishCounts[dish.name] = (dishCounts[dish.name] || 0) + 1; });
   $('#dish-summary').innerHTML = rankHTML(dishCounts, '기록한 메뉴가 아직 없어요');
-  const byDate = {};
-  entries.forEach(entry => {
+  const dates = [...new Set(entries.map(entry => entry.date))].sort().reverse().slice(0, 8);
+  const mealOrder = { breakfast: 0, lunch: 1, dinner: 2 };
+  const recentMealText = entry => {
     const dishes = dishRows(entry);
-    const text = entry.mode === '집에서 먹음' ? dishes.map(dish => dish.name).join(', ') || '집에서 먹음' : entry.mode === '외식' ? `외식 ${entry.place || ''} ${entry.outsideMenu || ''}` : entry.mode;
-    (byDate[entry.date] ||= []).push(`${MEAL_NAMES[entry.meal] || '식사'} ${text}`);
-  });
-  const dates = Object.keys(byDate).sort().reverse().slice(0, 8);
-  $('#recent-days').innerHTML = dates.length ? dates.map(date => `<div class="recent-row"><span>${dateLabel(date, true)}</span><span>${escapeHTML(byDate[date].join(' / '))}</span></div>`).join('') : '<p class="empty-state">기록이 쌓이면 날짜별로 보여드릴게요.</p>';
+    return entry.mode === '집에서 먹음' ? dishes.map(dish => dish.name).join(', ') || '집에서 먹음' : entry.mode === '외식' ? `외식 ${entry.place || ''} ${entry.outsideMenu || ''}` : entry.mode;
+  };
+  $('#recent-days').innerHTML = dates.length ? dates.map(date => {
+    const dayEntries = entries.filter(entry => entry.date === date).sort((a, b) => (mealOrder[a.meal] ?? 9) - (mealOrder[b.meal] ?? 9));
+    return `<div class="recent-day-group"><div class="recent-date">${dateLabel(date, true)}</div>${dayEntries.map(entry => `<div class="recent-meal-row"><strong>${MEAL_NAMES[entry.meal] || '식사'}</strong><span>${escapeHTML(recentMealText(entry))}</span></div>`).join('')}</div>`;
+  }).join('') : '<p class="empty-state">기록이 쌓이면 날짜별로 보여드릴게요.</p>';
   renderAlcoholSummary(start, end);
   $('#summary-meals-pane').classList.toggle('active', summaryTab === 'meals');
   $('#summary-alcohol-pane').classList.toggle('active', summaryTab === 'alcohol');
@@ -326,7 +350,7 @@ function addDishField(value = {}) {
   const dish = typeof value === 'string' ? { name: value, prep: '직접 조리', preparedBy: '아내' } : { preparedBy: '아내', ...value };
   const row = document.createElement('div'); row.className = 'dish-entry';
   const legacyTogether = dish.preparedBy === '함께';
-  const preparerOptions = `${PREPARERS.map(person => `<option value="${person}" ${dish.preparedBy === person ? 'selected' : ''}>${person}</option>`).join('')}${legacyTogether ? '<option value="함께" selected disabled>함께 (이전 기록)</option>' : ''}`;
+  const preparerOptions = `${PREPARERS.map(person => `<option value="${person}" ${dish.preparedBy === person ? 'selected' : ''}>${person}</option>`).join('')}<option value="함께" ${legacyTogether ? 'selected' : ''}>함께</option>`;
   row.innerHTML = `<div class="dish-main"><input type="text" maxlength="50" placeholder="예: 된장찌개" value="${escapeHTML(dish.name || '')}" aria-label="메뉴 이름"><button type="button" class="dish-remove" aria-label="메뉴 삭제">×</button></div><div class="dish-options"><select data-prep aria-label="${escapeHTML(dish.name || '이 메뉴')} 준비 방식">${PREP_METHODS.map(method => `<option value="${method}" ${dish.prep === method ? 'selected' : ''}>${method}</option>`).join('')}</select><select data-preparer aria-label="${escapeHTML(dish.name || '이 메뉴')} 준비한 사람">${preparerOptions}</select></div>`;
   row.querySelector('button').onclick = () => { if ($('#dish-list').children.length > 1) row.remove(); else row.querySelector('input').value = ''; };
   row.querySelector('[data-prep]').onchange = () => updateDishAttribution(row);
@@ -362,8 +386,7 @@ function renderPersonalMeals(record, mode) {
   draftMemberDetails = {};
   people.forEach(person => {
     const detail = record?.memberDetails?.[person] || {};
-    const legacyReason = mode === '먹지 않음' ? record?.reason || '' : '';
-    draftMemberDetails[person] = { ate: detail.ate ?? false, food: detail.food || '', reason: detail.reason || legacyReason };
+    draftMemberDetails[person] = { ate: detail.ate ?? false, food: detail.food || '' };
   });
   const participation = record?.participants || inferParticipants(record, mode);
   const radio = $(`input[name="meal-participants"][value="${participation}"]`);
@@ -383,21 +406,20 @@ function renderIndividualMealDetails() {
   const participation = $('input[name="meal-participants"]:checked')?.value || 'both';
   const absent = participation === 'both' ? [] : participation === 'wife' ? ['남편'] : participation === 'husband' ? ['아내'] : ['아내', '남편'];
   $('#personal-meal-details').innerHTML = absent.map(person => {
-    const detail = draftMemberDetails[person] || { ate: false, food: '', reason: '' };
-    return `<div class="person-meal-card"><strong>${person} 식사</strong><div class="choice-grid"><label class="choice-chip"><input type="radio" name="ate-${person}" value="true" ${detail.ate ? 'checked' : ''}><span>따로 먹었어요</span></label><label class="choice-chip"><input type="radio" name="ate-${person}" value="false" ${!detail.ate ? 'checked' : ''}><span>먹지 않았어요</span></label></div><div class="person-ate-fields ${detail.ate ? '' : 'hidden'}"><label>따로 먹은 음식</label><input type="text" name="food-${person}" maxlength="100" placeholder="예: 김밥, 회식 메뉴" value="${escapeHTML(detail.food)}"></div><div class="person-skip-fields ${detail.ate ? 'hidden' : ''}"><label>먹지 않은 이유</label><select name="reason-${person}"><option value="">이유 선택</option>${REASONS.map(reason => `<option value="${reason}" ${detail.reason === reason ? 'selected' : ''}>${reason}</option>`).join('')}</select></div></div>`;
+    const detail = draftMemberDetails[person] || { ate: false, food: '' };
+    return `<div class="person-meal-card"><strong>${person} 식사</strong><div class="choice-grid"><label class="choice-chip"><input type="radio" name="ate-${person}" value="true" ${detail.ate ? 'checked' : ''}><span>따로 먹었어요</span></label><label class="choice-chip"><input type="radio" name="ate-${person}" value="false" ${!detail.ate ? 'checked' : ''}><span>먹지 않았어요</span></label></div><div class="person-ate-fields ${detail.ate ? '' : 'hidden'}"><label>따로 먹은 음식</label><input type="text" name="food-${person}" maxlength="100" placeholder="예: 김밥, 회식 메뉴" value="${escapeHTML(detail.food)}"></div></div>`;
   }).join('');
   $('#personal-meal-details').oninput = event => {
     $('#personal-meal-field').dataset.edited = 'true';
-    const person = event.target.name?.replace(/^(food|reason)-/, '');
-    if (person && draftMemberDetails[person]) draftMemberDetails[person][event.target.name.startsWith('food-') ? 'food' : 'reason'] = event.target.value;
+    const person = event.target.name?.replace(/^food-/, '');
+    if (person && draftMemberDetails[person]) draftMemberDetails[person].food = event.target.value;
   };
   $('#personal-meal-details').onchange = event => {
     $('#personal-meal-field').dataset.edited = 'true';
-    const person = event.target.name?.replace(/^(ate|food|reason)-/, '');
+    const person = event.target.name?.replace(/^(ate|food)-/, '');
     if (person && draftMemberDetails[person]) {
       if (event.target.name.startsWith('ate-')) draftMemberDetails[person].ate = event.target.value === 'true';
       else if (event.target.name.startsWith('food-')) draftMemberDetails[person].food = event.target.value;
-      else if (event.target.name.startsWith('reason-')) draftMemberDetails[person].reason = event.target.value;
     }
     if (event.target.name?.startsWith('ate-')) renderIndividualMealDetails();
   };
@@ -445,18 +467,14 @@ $('#meal-form').addEventListener('submit', event => {
   const memberDetails = {};
   for (const person of ['아내', '남편']) {
     if (participantAte[person]) {
-      memberDetails[person] = { ate: true, food: '', reason: '' };
+      memberDetails[person] = { ate: true, food: '' };
       continue;
     }
     const ate = $(`input[name="ate-${person}"]:checked`)?.value === 'true';
     const food = $(`[name="food-${person}"]`)?.value.trim() || '';
-    const memberReason = $(`[name="reason-${person}"]`)?.value || '';
     if (ate && !food) { toast(`${person}가 따로 먹은 음식을 적어주세요.`); return; }
-    if (!ate && !memberReason) { toast(`${person}이 먹지 않은 이유를 선택해주세요.`); return; }
-    memberDetails[person] = { ate, food: ate ? food : '', reason: ate ? '' : memberReason };
+    memberDetails[person] = { ate, food: ate ? food : '' };
   }
-  const skippedReasons = Object.values(memberDetails).filter(person => !person.ate).map(person => person.reason);
-  const reason = skippedReasons.length ? [...new Set(skippedReasons)].join(' · ') : '';
   const alcoholChoice = meal === 'dinner' ? $('input[name="alcohol-status"]:checked')?.value : undefined;
   if (alcoholChoice === 'true') {
     const drinks = $$('#alcohol-drink-list .alcohol-drink-row').map(row => ({ type: row.querySelector('input[type="text"]').value.trim(), amount: row.querySelector('input[type="number"]').value, unit: row.querySelector('select').value })).filter(drink => drink.type && drink.amount);
@@ -470,7 +488,7 @@ $('#meal-form').addEventListener('submit', event => {
     persistAlcoholLogs();
   }
   const dishwasher = mode === '집에서 먹음' ? $('input[name="dishwasher"]:checked')?.value || '아직 안 함' : '';
-  records[recordKey(date, meal)] = { mode, participants, dishes: mode === '집에서 먹음' ? menuRecords : [], place: mode === '외식' ? place : '', outsideMenu: mode === '외식' ? outsideMenu : '', reason, memberDetails, dishwasher, note: mode === '외식' ? '' : $('#meal-note').value.trim(), updatedAt: new Date().toISOString() };
+  records[recordKey(date, meal)] = { mode, participants, dishes: mode === '집에서 먹음' ? menuRecords : [], place: mode === '외식' ? place : '', outsideMenu: mode === '외식' ? outsideMenu : '', memberDetails, dishwasher, note: mode === '외식' ? '' : $('#meal-note').value.trim(), updatedAt: new Date().toISOString() };
   persist(); $('#meal-dialog').close(); toast('식사 기록을 저장했어요.');
 });
 $('#delete-meal').onclick = () => { delete records[recordKey($('#form-date').value, $('#form-meal').value)]; persist(); $('#meal-dialog').close(); toast('기록을 삭제했어요.'); };
