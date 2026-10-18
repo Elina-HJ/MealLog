@@ -4,6 +4,7 @@ const PREP_METHODS = ['직접 조리', '밀키트·냉동식품', '남은 음식
 const PREPARERS = ['아내', '남편'];
 const CLEANUP_OPTIONS = ['아내', '남편', '함께', '아직 안 함', '설거지 없음'];
 const ALCOHOL_KEY = 'meal-log-alcohol-v1';
+const PHOTO_BUCKET = 'meal-photos';
 const MEAL_NAMES = { breakfast: '아침', lunch: '점심', dinner: '저녁' };
 const CALENDAR_MEALS = ['breakfast', 'lunch', 'dinner'];
 const CALENDAR_LETTERS = { breakfast: 'B', lunch: 'L', dinner: 'D' };
@@ -20,6 +21,11 @@ let alcoholLogs = loadAlcoholLogs();
 let summaryRange = 'week';
 let summaryTab = 'meals';
 let draftMemberDetails = {};
+let pendingMealPhoto = null;
+let photoPreviewUrl = '';
+let existingMealPhotoPath = '';
+let removeExistingMealPhoto = false;
+const signedPhotoUrls = new Map();
 const cloudConfig = window.MEALLOG_SUPABASE_CONFIG || {};
 const supabaseClient = cloudConfig.url && cloudConfig.publishableKey && window.supabase?.createClient
   ? window.supabase.createClient(cloudConfig.url, cloudConfig.publishableKey)
@@ -147,6 +153,7 @@ function renderToday() {
   $('#today-date-label').textContent = selectedDate === toISO(new Date()) ? '오늘도 잘 챙겨 먹어요' : '지난 식사 기록';
   $('#selected-date').textContent = dateLabel(selectedDate, true);
   $('#meal-list').innerHTML = mealsFor(selectedDate).map(meal => mealCard(selectedDate, meal)).join('');
+  hydratePhotos($('#meal-list'));
 }
 function mealCard(date, meal) {
   const record = records[recordKey(date, meal)];
@@ -160,7 +167,31 @@ function mealCard(date, meal) {
   else if (record.mode === '외식') content = `<div class="dish-summary-line"><strong>${escapeHTML(record.outsideMenu || '메뉴 미입력')}</strong></div><span>장소 · ${escapeHTML(record.place || '미입력')}</span>`;
   else content = escapeHTML(record.mode);
   const cleanup = record.mode === '집에서 먹음' && record.dishwasher ? `<div class="calendar-extra">설거지 · ${escapeHTML(record.dishwasher)}</div>` : '';
-  return `<article class="meal-card"><div class="meal-card-top"><div><div class="meal-name">${name}</div><div class="meal-time">${escapeHTML(record.mode)}</div></div><span class="meal-status">기록 완료</span></div>${content ? `<div class="meal-content">${content}</div>` : ''}${memberMealSummary(record)}${meal === 'dinner' ? alcoholMealSummary(date) : ''}${cleanup}${record.note ? `<div class="meal-note">${escapeHTML(record.note)}</div>` : ''}<button class="meal-edit" data-edit="${date}|${meal}">기록 수정 ›</button></article>`;
+  return `<article class="meal-card"><div class="meal-card-top"><div><div class="meal-name">${name}</div><div class="meal-time">${escapeHTML(record.mode)}</div></div><span class="meal-status">기록 완료</span></div>${content ? `<div class="meal-content">${content}</div>` : ''}${mealPhotoHTML(record.photoPath)}${memberMealSummary(record)}${meal === 'dinner' ? alcoholMealSummary(date) : ''}${cleanup}${record.note ? `<div class="meal-note">${escapeHTML(record.note)}</div>` : ''}<button class="meal-edit" data-edit="${date}|${meal}">기록 수정 ›</button></article>`;
+}
+function mealPhotoHTML(path) {
+  return path ? `<div class="meal-photo" data-meal-photo data-photo-path="${escapeHTML(path)}"><span>사진 불러오는 중…</span></div>` : '';
+}
+async function hydratePhotos(root = document) {
+  if (!supabaseClient || !cloudUserId) return;
+  const nodes = [...root.querySelectorAll('[data-meal-photo]')];
+  await Promise.all(nodes.map(async node => {
+    const path = node.dataset.photoPath;
+    try {
+      let cached = signedPhotoUrls.get(path);
+      if (!cached || cached.expiresAt < Date.now()) {
+        const { data, error } = await supabaseClient.storage.from(PHOTO_BUCKET).createSignedUrl(path, 3600);
+        if (error) throw error;
+        cached = { url: data.signedUrl, expiresAt: Date.now() + 50 * 60 * 1000 };
+        signedPhotoUrls.set(path, cached);
+      }
+      if (!node.isConnected) return;
+      node.innerHTML = `<img src="${escapeHTML(cached.url)}" alt="식사 사진" loading="lazy" />`;
+    } catch (error) {
+      console.error('MealLog photo load failed', error);
+      if (node.isConnected) node.innerHTML = '<span>사진을 불러오지 못했어요.</span>';
+    }
+  }));
 }
 function alcoholMealSummary(date) {
   const log = alcoholLogs[date];
@@ -211,6 +242,7 @@ function renderCalendar() {
   $('#calendar-detail-subtitle').textContent = calendarDate === toISO(new Date()) ? '오늘' : '선택한 날짜';
   const loggedMeals = mealsFor(calendarDate).filter(meal => records[recordKey(calendarDate, meal)]);
   $('#calendar-detail').innerHTML = `${loggedMeals.length ? loggedMeals.map(meal => calendarMealDetail(calendarDate, meal)).join('') : '<p class="empty-state">이 날짜에는 식사 기록이 없어요.</p>'}${alcoholMealSummary(calendarDate)}`;
+  hydratePhotos($('#calendar-detail'));
 }
 function calendarMealDetail(date, meal) {
   const record = records[recordKey(date, meal)];
@@ -220,7 +252,7 @@ function calendarMealDetail(date, meal) {
   else if (record.mode === '외식') content = `<div class="dish-summary-line"><strong>${escapeHTML(record.outsideMenu || '메뉴 미입력')}</strong></div><span>장소 · ${escapeHTML(record.place || '미입력')}</span>`;
   else content = '';
   const cleanup = record.mode === '집에서 먹음' && record.dishwasher ? `<div class="calendar-extra">설거지 · ${escapeHTML(record.dishwasher)}</div>` : '';
-  return `<article class="meal-card"><div class="meal-card-top"><div><div class="meal-name">${MEAL_NAMES[meal]}</div><div class="meal-time">${escapeHTML(record.mode)}</div></div><span class="meal-status">기록 완료</span></div>${content ? `<div class="meal-content">${content}</div>` : ''}${memberMealSummary(record)}${cleanup}</article>`;
+  return `<article class="meal-card"><div class="meal-card-top"><div><div class="meal-name">${MEAL_NAMES[meal]}</div><div class="meal-time">${escapeHTML(record.mode)}</div></div><span class="meal-status">기록 완료</span></div>${content ? `<div class="meal-content">${content}</div>` : ''}${mealPhotoHTML(record.photoPath)}${memberMealSummary(record)}${cleanup}</article>`;
 }
 
 function rangeDates() {
@@ -325,11 +357,78 @@ function rankHTML(counts, empty) {
   return `<div class="rank-list">${rows.map(([name, count]) => `<div class="rank-row"><span class="rank-label">${escapeHTML(name)}</span><strong>${count}회</strong><div class="rank-bar"><span style="width:${Math.max(7, count / max * 100)}%"></span></div></div>`).join('')}</div>`;
 }
 
+async function compressMealPhoto(file) {
+  let image;
+  try { image = await createImageBitmap(file, { imageOrientation: 'from-image' }); }
+  catch {
+    image = await new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file), img = new Image();
+      img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('사진 파일을 열 수 없어요.')); };
+      img.src = url;
+    });
+  }
+  let width = image.width, height = image.height;
+  const scale = Math.min(1, 1024 / Math.max(width, height));
+  width = Math.max(1, Math.round(width * scale)); height = Math.max(1, Math.round(height * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = width; canvas.height = height;
+  const context = canvas.getContext('2d', { alpha: false });
+  context.fillStyle = '#ffffff'; context.fillRect(0, 0, width, height);
+  context.drawImage(image, 0, 0, width, height);
+  image.close?.();
+  const toBlob = quality => new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('사진 압축에 실패했어요.')), 'image/webp', quality));
+  let blob;
+  for (const quality of [0.62, 0.52, 0.42, 0.34]) {
+    blob = await toBlob(quality);
+    if (blob.size <= 300 * 1024) break;
+  }
+  if (blob.size > 300 * 1024) {
+    const smaller = document.createElement('canvas');
+    smaller.width = Math.round(width * 0.72); smaller.height = Math.round(height * 0.72);
+    smaller.getContext('2d', { alpha: false }).drawImage(canvas, 0, 0, smaller.width, smaller.height);
+    blob = await new Promise((resolve, reject) => smaller.toBlob(value => value ? resolve(value) : reject(new Error('사진 압축에 실패했어요.')), 'image/webp', 0.38));
+  }
+  const type = blob.type || 'image/jpeg';
+  return { blob, extension: type === 'image/webp' ? 'webp' : 'jpg', type };
+}
+function renderMealPhotoPreview() {
+  const preview = $('#meal-photo-preview');
+  if (photoPreviewUrl) URL.revokeObjectURL(photoPreviewUrl);
+  photoPreviewUrl = '';
+  if (pendingMealPhoto) {
+    photoPreviewUrl = URL.createObjectURL(pendingMealPhoto.blob);
+    preview.innerHTML = `<div class="meal-photo"><img src="${photoPreviewUrl}" alt="선택한 식사 사진 미리보기" /></div><span class="photo-size">압축 후 ${(pendingMealPhoto.blob.size / 1024).toFixed(0)}KB</span>`;
+  } else if (existingMealPhotoPath && !removeExistingMealPhoto) {
+    preview.innerHTML = mealPhotoHTML(existingMealPhotoPath);
+    hydratePhotos(preview);
+  } else preview.innerHTML = '';
+  $('#remove-meal-photo').classList.toggle('hidden', !pendingMealPhoto && (!existingMealPhotoPath || removeExistingMealPhoto));
+}
+async function uploadMealPhoto(date, meal, image) {
+  if (!supabaseClient || !cloudUserId) throw new Error('사진 저장을 위해 로그인 상태를 확인해 주세요.');
+  const random = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const path = `${cloudUserId}/${date}/${meal}-${random}.${image.extension}`;
+  const { error } = await supabaseClient.storage.from(PHOTO_BUCKET).upload(path, image.blob, { contentType: image.type, cacheControl: '3600', upsert: false });
+  if (error) throw error;
+  signedPhotoUrls.delete(path);
+  return path;
+}
+async function deleteMealPhoto(path) {
+  if (!path || !supabaseClient || !cloudUserId) return;
+  const { error } = await supabaseClient.storage.from(PHOTO_BUCKET).remove([path]);
+  if (error) console.error('MealLog photo delete failed', error);
+  signedPhotoUrls.delete(path);
+}
+
 function openEditor(date, meal) {
   const old = records[recordKey(date, meal)];
   $('#form-date').value = date; $('#form-meal').value = meal;
   $('#dialog-date').textContent = dateLabel(date, true); $('#dialog-title').textContent = `${MEAL_NAMES[meal]} 기록`;
   $('#meal-note').value = old?.note || '';
+  pendingMealPhoto = null; existingMealPhotoPath = old?.photoPath || ''; removeExistingMealPhoto = false;
+  $('#meal-photo-input').value = '';
+  renderMealPhotoPreview();
   $('#outside-place').value = old?.place || '';
   $('#outside-menu').value = old?.outsideMenu || '';
   $('#mode-choices').innerHTML = MODES.map((mode, index) => `<label class="choice-chip"><input type="radio" name="mode" value="${mode}" ${old?.mode === mode || (!old && index === 0) ? 'checked' : ''}><span>${mode}</span></label>`).join('');
@@ -449,7 +548,15 @@ $('#add-dish').onclick = () => addDishField();
 $('#quick-breakfast').addEventListener('click', event => { const button = event.target.closest('[data-quick-dish]'); if (button) addDishField({ name: button.dataset.quickDish, prep: '직접 조리' }); });
 $('#close-dialog').onclick = () => $('#meal-dialog').close();
 $('#meal-dialog').addEventListener('click', event => { if (event.target === $('#meal-dialog')) $('#meal-dialog').close(); });
-$('#meal-form').addEventListener('submit', event => {
+$('#meal-photo-input').addEventListener('change', async event => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  if (!file.type.startsWith('image/')) { toast('이미지 파일을 선택해주세요.'); event.target.value = ''; return; }
+  try { pendingMealPhoto = await compressMealPhoto(file); removeExistingMealPhoto = false; renderMealPhotoPreview(); }
+  catch (error) { toast(error.message || '사진을 준비하지 못했어요.'); event.target.value = ''; }
+});
+$('#remove-meal-photo').onclick = () => { pendingMealPhoto = null; removeExistingMealPhoto = Boolean(existingMealPhotoPath); $('#meal-photo-input').value = ''; renderMealPhotoPreview(); };
+$('#meal-form').addEventListener('submit', async event => {
   event.preventDefault();
   const date = $('#form-date').value, meal = $('#form-meal').value, mode = $('input[name="mode"]:checked')?.value;
   if (!mode) { toast('먹은 방식을 선택해주세요.'); return; }
@@ -488,10 +595,22 @@ $('#meal-form').addEventListener('submit', event => {
     persistAlcoholLogs();
   }
   const dishwasher = mode === '집에서 먹음' ? $('input[name="dishwasher"]:checked')?.value || '아직 안 함' : '';
-  records[recordKey(date, meal)] = { mode, participants, dishes: mode === '집에서 먹음' ? menuRecords : [], place: mode === '외식' ? place : '', outsideMenu: mode === '외식' ? outsideMenu : '', memberDetails, dishwasher, note: mode === '외식' ? '' : $('#meal-note').value.trim(), updatedAt: new Date().toISOString() };
+  const saveButton = $('.save-button');
+  const previousPhotoPath = records[recordKey(date, meal)]?.photoPath || '';
+  let photoPath = removeExistingMealPhoto ? '' : existingMealPhotoPath;
+  if (pendingMealPhoto) {
+    saveButton.disabled = true; saveButton.textContent = '사진 저장 중…';
+    try { photoPath = await uploadMealPhoto(date, meal, pendingMealPhoto); }
+    catch (error) { toast(error.message || '사진 저장에 실패했어요. Supabase Storage 설정을 확인해주세요.'); saveButton.disabled = false; saveButton.textContent = '기록 저장'; return; }
+  }
+  records[recordKey(date, meal)] = { mode, participants, dishes: mode === '집에서 먹음' ? menuRecords : [], place: mode === '외식' ? place : '', outsideMenu: mode === '외식' ? outsideMenu : '', memberDetails, dishwasher, note: mode === '외식' ? '' : $('#meal-note').value.trim(), photoPath, updatedAt: new Date().toISOString() };
   persist(); $('#meal-dialog').close(); toast('식사 기록을 저장했어요.');
+  if (previousPhotoPath && previousPhotoPath !== photoPath) deleteMealPhoto(previousPhotoPath);
+  if (photoPreviewUrl) URL.revokeObjectURL(photoPreviewUrl);
+  photoPreviewUrl = ''; pendingMealPhoto = null; existingMealPhotoPath = ''; removeExistingMealPhoto = false;
+  saveButton.disabled = false; saveButton.textContent = '기록 저장';
 });
-$('#delete-meal').onclick = () => { delete records[recordKey($('#form-date').value, $('#form-meal').value)]; persist(); $('#meal-dialog').close(); toast('기록을 삭제했어요.'); };
+$('#delete-meal').onclick = async () => { const key = recordKey($('#form-date').value, $('#form-meal').value), photoPath = records[key]?.photoPath; delete records[key]; persist(); $('#meal-dialog').close(); toast('기록을 삭제했어요.'); await deleteMealPhoto(photoPath); };
 $('#export-button').onclick = () => {
   const blob = new Blob([JSON.stringify({ app: 'MealLog', exportedAt: new Date().toISOString(), records, alcoholLogs }, null, 2)], { type: 'application/json' });
   const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = `MealLog-${toISO(new Date())}.json`; link.click(); URL.revokeObjectURL(link.href); toast('기록 파일을 내려받았어요.');
