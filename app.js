@@ -70,6 +70,11 @@ function syncCloud() {
 }
 function setAccountSignedIn(user) {
   cloudUserId = user?.id || null;
+  if (supabaseClient) {
+    $('#auth-gate').classList.toggle('hidden', Boolean(user));
+    $('#app-shell').classList.toggle('hidden', !user);
+    if (!user) $('#auth-message').textContent = '계정에 로그인하면 저장된 기록을 불러옵니다.';
+  }
   $('#account-form').classList.toggle('hidden', Boolean(user));
   $('#account-sign-out').classList.toggle('hidden', !user);
   $('#account-status').textContent = user ? '동기화 중' : (supabaseClient ? '로그인 필요' : '이 기기에 저장 중');
@@ -102,6 +107,7 @@ async function loadCloudData(user) {
   } catch (error) {
     console.error('MealLog cloud load failed', error);
     cloudUserId = null;
+    $('#auth-message').textContent = '저장소 연결에 실패했어요. Supabase 테이블과 보안 정책을 확인해주세요.';
     $('#account-status').textContent = '연결 실패';
     $('#account-message').textContent = '테이블과 보안 정책 설정을 확인해 주세요. 현재 기록은 이 기기에 보관돼 있어요.';
   } finally {
@@ -113,6 +119,8 @@ function initializeCloudAuth() {
   if (!supabaseClient) {
     $('#account-form').classList.add('hidden');
     $('#account-status').textContent = '설정 필요';
+    $('#auth-gate').classList.add('hidden');
+    $('#app-shell').classList.remove('hidden');
     return;
   }
   supabaseClient.auth.getSession().then(({ data, error }) => {
@@ -252,20 +260,13 @@ function renderSummary() {
   const periodStart = summaryRange === 'all' ? firstRecordedDate : start;
   const totalMealSlots = countMealSlots(periodStart, end);
   $('#summary-period').textContent = summaryRange === 'all' ? (entries.length ? `${dateLabel(firstRecordedDate)}부터 오늘까지` : '아직 기록이 없어요') : `${dateLabel(start)} — ${dateLabel(end)}`;
-  $('#summary-cards').innerHTML = `<div class="stat-card featured"><div class="stat-label">아내가 준비에 참여한 끼니</div><div class="stat-value">${userPreparedMeals}<small> / ${totalMealSlots}끼</small></div><div class="stat-sub">직접 조리·밀키트·간편식으로 준비</div></div><div class="stat-card"><div class="stat-label">남편이 준비에 참여한 끼니</div><div class="stat-value">${husbandPreparedMeals}<small> / ${totalMealSlots}끼</small></div><div class="stat-sub">직접 조리·밀키트·간편식으로 준비</div></div><div class="stat-card"><div class="stat-label">함께 준비한 끼니</div><div class="stat-value">${sharedPreparedMeals}<small>끼</small></div><div class="stat-sub">같은 끼니에 아내·남편 담당 메뉴가 모두 있어요</div></div><div class="stat-card"><div class="stat-label">직접 조리한 메뉴</div><div class="stat-value">${countPrep('직접 조리')}<small>개</small></div><div class="stat-sub">과일주스·삶은 계란 포함</div></div><div class="stat-card"><div class="stat-label">배달·포장 메뉴</div><div class="stat-value">${deliveryCount}<small>개</small></div><div class="stat-sub">집에서 먹은 메뉴 중</div></div><div class="stat-card"><div class="stat-label">외식 끼니</div><div class="stat-value">${out.length}<small>끼</small></div><div class="stat-sub">끼니 전체를 외식으로 기록</div></div>`;
+  $('#summary-cards').innerHTML = `<div class="stat-card featured"><div class="stat-label">아내가 준비에 참여한 끼니</div><div class="stat-value">${userPreparedMeals}<small> / ${totalMealSlots}끼</small></div></div><div class="stat-card"><div class="stat-label">남편이 준비에 참여한 끼니</div><div class="stat-value">${husbandPreparedMeals}<small> / ${totalMealSlots}끼</small></div></div><div class="stat-card"><div class="stat-label">함께 준비한 끼니</div><div class="stat-value">${sharedPreparedMeals}<small>끼</small></div></div><div class="stat-card"><div class="stat-label">직접 조리한 메뉴</div><div class="stat-value">${countPrep('직접 조리')}<small>개</small></div></div><div class="stat-card"><div class="stat-label">배달·포장 메뉴</div><div class="stat-value">${deliveryCount}<small>개</small></div></div><div class="stat-card"><div class="stat-label">외식 끼니</div><div class="stat-value">${out.length}<small>끼</small></div></div>`;
   const cleanupCounts = {};
   entries.filter(entry => entry.mode === '집에서 먹음' && entry.dishwasher).forEach(entry => { cleanupCounts[entry.dishwasher] = (cleanupCounts[entry.dishwasher] || 0) + 1; });
   $('#dishwashing-summary').innerHTML = rankHTML(cleanupCounts, '설거지 담당 기록이 아직 없어요');
   const dishCounts = {};
   allDishes.filter(dish => !['밀키트·냉동식품', '남은 음식'].includes(dish.prep)).forEach(dish => { dishCounts[dish.name] = (dishCounts[dish.name] || 0) + 1; });
   $('#dish-summary').innerHTML = rankHTML(dishCounts, '기록한 메뉴가 아직 없어요');
-  const reasons = {};
-  entries.forEach(entry => {
-    const personalReasons = entry.memberDetails ? Object.values(entry.memberDetails).filter(person => !person.ate).map(person => person.reason).filter(Boolean) : [];
-    const reasonsForEntry = personalReasons.length ? personalReasons : entry.mode === '먹지 않음' ? [entry.reason || '미입력'] : [];
-    reasonsForEntry.forEach(reason => { reasons[reason] = (reasons[reason] || 0) + 1; });
-  });
-  $('#reason-summary').innerHTML = rankHTML(reasons, '해당 기록이 없어요');
   const byDate = {};
   entries.forEach(entry => {
     const dishes = dishRows(entry);
@@ -512,28 +513,32 @@ function renderAlcohol(date) {
 }
 $('#add-alcohol-drink').onclick = () => addAlcoholDrink();
 
-async function accountAction(action) {
+async function accountAction(action, inputPrefix = 'account') {
   if (!supabaseClient) { toast('supabase-config.js에 Supabase URL과 Publishable key를 먼저 입력해주세요.'); return; }
-  const email = $('#account-email').value.trim(), password = $('#account-password').value;
-  if (!email || !password) { toast('이메일과 비밀번호를 입력해주세요.'); return; }
-  $('#account-status').textContent = '연결 중';
+  const email = $(`#${inputPrefix}-email`).value.trim(), password = $(`#${inputPrefix}-password`).value;
+  if (!email || !password) { $('#auth-message').textContent = '이메일과 비밀번호를 입력해주세요.'; return; }
+  $('#auth-message').textContent = '계정을 확인하고 있어요.';
   const result = action === 'sign-in'
     ? await supabaseClient.auth.signInWithPassword({ email, password })
     : await supabaseClient.auth.signUp({ email, password, options: { emailRedirectTo: location.origin + location.pathname } });
   if (result.error) {
     $('#account-status').textContent = '로그인 필요';
     $('#account-message').textContent = result.error.message;
+    $('#auth-message').textContent = result.error.message;
     return;
   }
   if (action === 'sign-up' && !result.data.session) {
     $('#account-status').textContent = '이메일 확인 필요';
     $('#account-message').textContent = 'Supabase에서 보낸 확인 이메일의 링크를 누른 뒤 로그인해주세요.';
+    $('#auth-message').textContent = '가입 확인 이메일을 보냈어요. 이메일의 링크를 누른 다음 로그인해주세요.';
     return;
   }
   if (result.data.user) await loadCloudData(result.data.user);
 }
 $('#account-sign-in').onclick = () => accountAction('sign-in').catch(error => { console.error(error); toast('로그인 중 문제가 생겼어요.'); });
 $('#account-sign-up').onclick = () => accountAction('sign-up').catch(error => { console.error(error); toast('계정을 만드는 중 문제가 생겼어요.'); });
+$('#auth-sign-in').onclick = () => accountAction('sign-in', 'auth').catch(error => { console.error(error); $('#auth-message').textContent = '로그인 중 문제가 생겼어요. 다시 시도해주세요.'; });
+$('#auth-sign-up').onclick = () => accountAction('sign-up', 'auth').catch(error => { console.error(error); $('#auth-message').textContent = '계정을 만드는 중 문제가 생겼어요. 다시 시도해주세요.'; });
 $('#account-sign-out').onclick = async () => {
   const { error } = await supabaseClient.auth.signOut();
   if (error) toast('로그아웃하지 못했어요.');
