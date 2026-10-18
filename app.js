@@ -339,6 +339,7 @@ function renderSummary() {
   $('#summary-alcohol-pane').classList.toggle('active', summaryTab === 'alcohol');
   $$('.summary-view-tab').forEach(button => button.classList.toggle('active', button.dataset.summaryTab === summaryTab));
   const galleryPaths = [...entries].sort((a, b) => b.date.localeCompare(a.date) || (mealOrder[a.meal] ?? 9) - (mealOrder[b.meal] ?? 9)).flatMap(entry => recordPhotoPaths(entry));
+  $('#summary-photo-section').classList.toggle('hidden', galleryPaths.length === 0);
   $('#summary-photo-gallery').innerHTML = galleryPaths.map(path => `<div class="meal-photo" data-meal-photo data-photo-path="${escapeHTML(path)}"><span>사진 불러오는 중…</span></div>`).join('');
   hydratePhotos($('#summary-photo-gallery'));
 }
