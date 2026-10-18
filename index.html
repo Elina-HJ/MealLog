@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#f8f6f1" />
+    <meta name="description" content="매일의 식사를 간편하게 기록하고 돌아보는 식사 기록장" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./account.css" />
+    <title>MealLog</title>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="#today" aria-label="MealLog 홈"><span class="brand-mark">M</span><span>MealLog</span></a>
+        <button class="icon-button" id="export-button" aria-label="기록 내보내기" title="기록 내보내기">↥</button>
+      </header>
+
+      <main>
+        <section class="view active" id="today-view" aria-labelledby="today-title">
+          <div class="greeting-row">
+            <div><p class="eyebrow" id="today-date-label"></p><h1 id="today-title">오늘의 식사</h1></div>
+            <button class="today-link" id="go-today">오늘로</button>
+          </div>
+          <div class="date-strip">
+            <button class="date-arrow" id="prev-day" aria-label="전날">‹</button>
+            <button class="date-current" id="date-picker-button"><span id="selected-date"></span><span class="calendar-glyph">▦</span></button>
+            <input type="date" id="date-picker" aria-label="날짜 선택" />
+            <button class="date-arrow" id="next-day" aria-label="다음 날">›</button>
+          </div>
+          <div id="meal-list" class="meal-list"></div>
+          <section class="account-card" id="account-card">
+            <div class="account-heading"><strong>기록 동기화</strong><span id="account-status">이 기기에 저장 중</span></div>
+            <p id="account-message">Supabase 연결 후 로그인하면 휴대폰과 컴퓨터에서 기록을 함께 볼 수 있어요.</p>
+            <div id="account-form" class="account-form">
+              <label for="account-email">이메일</label><input id="account-email" type="email" autocomplete="username" placeholder="이메일 주소" />
+              <label for="account-password">비밀번호</label><input id="account-password" type="password" autocomplete="current-password" placeholder="비밀번호" />
+              <div class="account-actions"><button type="button" id="account-sign-in">로그인</button><button type="button" id="account-sign-up">계정 만들기</button></div>
+            </div>
+            <button type="button" id="account-sign-out" class="account-sign-out hidden">로그아웃</button>
+            <div class="backup-actions"><button type="button" id="import-button">JSON 백업 가져오기</button><input id="import-file" type="file" accept="application/json,.json" hidden /></div>
+          </section>
+        </section>
+
+        <section class="view" id="calendar-view" aria-labelledby="calendar-title">
+          <div class="greeting-row"><div><p class="eyebrow">기록 모아보기</p><h1 id="calendar-title">달력</h1></div></div>
+          <div class="calendar-legend"><span><i class="legend-dot cooked"></i>집에서 먹음</span><span><i class="legend-dot outside"></i>외식</span><span><i class="legend-dot other"></i>거름·미기록</span></div>
+          <div class="calendar-card">
+            <div class="month-heading"><button class="date-arrow" id="prev-month" aria-label="이전 달">‹</button><strong id="month-label"></strong><button class="date-arrow" id="next-month" aria-label="다음 달">›</button></div>
+            <div class="calendar-grid weekday-labels"><span>월</span><span>화</span><span>수</span><span>목</span><span>금</span><span>토</span><span>일</span></div>
+            <div class="calendar-grid" id="calendar-days"></div>
+          </div>
+          <div id="calendar-detail-panel" class="calendar-detail-panel hidden">
+            <div class="section-heading"><h2 id="calendar-detail-title">선택한 날짜</h2><span class="muted" id="calendar-detail-subtitle"></span></div>
+            <div id="calendar-detail" class="meal-list compact"></div>
+          </div>
+        </section>
+
+        <section class="view" id="summary-view" aria-labelledby="summary-title">
+          <div class="greeting-row"><div><p class="eyebrow">차곡차곡 쌓인 기록</p><h1 id="summary-title">요약</h1></div></div>
+          <div class="range-tabs" role="tablist" aria-label="요약 기간"><button class="range-tab active" data-range="week">최근 7일</button><button class="range-tab" data-range="month">이번 달</button><button class="range-tab" data-range="all">전체</button></div>
+          <p class="summary-period" id="summary-period"></p>
+          <div class="summary-view-tabs" role="tablist" aria-label="요약 종류"><button class="summary-view-tab active" data-summary-tab="meals">식사</button><button class="summary-view-tab" data-summary-tab="alcohol">술</button></div>
+          <div class="summary-pane active" id="summary-meals-pane">
+            <div class="summary-cards" id="summary-cards"></div>
+            <div class="summary-panel"><h2>기록한 메뉴</h2><div id="dish-summary"></div></div>
+            <div class="summary-panel"><h2>식사하지 않은 이유</h2><div id="reason-summary"></div></div>
+            <div class="summary-panel"><h2>설거지 담당</h2><div id="dishwashing-summary"></div></div>
+            <div class="summary-panel"><h2>날짜별 기록</h2><div id="recent-days"></div></div>
+          </div>
+          <div class="summary-pane" id="summary-alcohol-pane">
+            <div class="summary-cards" id="alcohol-summary-cards"></div>
+            <div class="summary-panel"><h2>종류별 마신 양</h2><div id="alcohol-quantity-summary"></div></div>
+            <div class="summary-panel"><h2>날짜별 술 기록</h2><div id="alcohol-daily-summary"></div></div>
+          </div>
+        </section>
+
+      </main>
+
+      <nav class="bottom-nav" aria-label="주요 메뉴">
+        <button class="nav-item active" data-view="today"><span class="nav-icon">＋</span><span>기록</span></button>
+        <button class="nav-item" data-view="calendar"><span class="nav-icon">▦</span><span>달력</span></button>
+        <button class="nav-item" data-view="summary"><span class="nav-icon">⌁</span><span>요약</span></button>
+      </nav>
+    </div>
+
+    <dialog id="meal-dialog" class="meal-dialog">
+      <form id="meal-form" method="dialog">
+        <div class="dialog-heading"><div><p class="eyebrow" id="dialog-date"></p><h2 id="dialog-title">아침 기록</h2></div><button type="button" class="close-button" id="close-dialog" aria-label="닫기">×</button></div>
+        <input type="hidden" id="form-date" /><input type="hidden" id="form-meal" />
+        <fieldset id="personal-meal-field"><legend>누가 식사했나요?</legend><div class="choice-grid participation-choices" id="meal-participation-choices"></div><p class="optional personal-hint">한 사람만 먹었거나 먹지 않았다면 다른 사람의 식사를 아래에서 따로 기록할 수 있어요.</p><div id="personal-meal-details"></div></fieldset>
+        <fieldset><legend>어떻게 먹었나요?</legend><div class="choice-grid" id="mode-choices"></div></fieldset>
+        <div id="home-fields" class="conditional-fields hidden">
+          <fieldset><legend>먹은 메뉴 <span class="optional">메뉴마다 준비 방식과 준비한 사람을 선택해요</span></legend><div id="quick-breakfast" class="quick-breakfast hidden"><span>평일 아침 빠른 추가</span><button type="button" data-quick-dish="과일주스">＋ 과일주스</button><button type="button" data-quick-dish="삶은 계란">＋ 삶은 계란</button></div><div id="dish-list"></div><button type="button" class="add-dish" id="add-dish">＋ 메뉴 추가</button></fieldset>
+        </div>
+        <div id="outside-fields" class="conditional-fields hidden">
+          <div class="field"><label for="outside-place">외식 장소</label><input id="outside-place" type="text" maxlength="80" placeholder="예: 동네 초밥집" /></div>
+          <div class="field"><label for="outside-menu">먹은 메뉴</label><input id="outside-menu" type="text" maxlength="160" placeholder="예: 모둠초밥, 우동" /></div>
+        </div>
+        <fieldset id="alcohol-field"><legend>술 기록 <span class="optional">식사와 함께 마셨다면 기록해요</span></legend><div class="choice-grid" id="alcohol-status-choices"></div><div id="alcohol-fields"><div class="field"><label>종류와 양</label><div id="alcohol-drink-list"></div><button type="button" class="add-dish" id="add-alcohol-drink">＋ 술 추가</button></div><div class="field"><label>마신 사람 <span class="optional">둘 다 선택하면 함께</span></label><div class="choice-grid" id="alcohol-drinker-choices"></div></div></div></fieldset>
+        <fieldset id="cleanup-field"><legend>설거지한 사람</legend><div class="choice-grid" id="cleanup-choices"></div></fieldset>
+        <div class="field" id="note-field"><label for="meal-note">메모 <span class="optional">선택</span></label><textarea id="meal-note" rows="2" placeholder="함께 먹은 사람이나 기억하고 싶은 내용을 적어두세요"></textarea></div>
+        <div class="dialog-actions"><button type="button" class="delete-button hidden" id="delete-meal">기록 삭제</button><button type="submit" class="save-button">기록 저장</button></div>
+      </form>
+    </dialog>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="./supabase-config.js"></script>
+    <script src="./app.js" defer></script>
+  </body>
+</html>

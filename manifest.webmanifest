@@ -1,0 +1,11 @@
+{
+  "name": "MealLog",
+  "short_name": "MealLog",
+  "description": "매일의 식사를 간편하게 기록하고 돌아보는 식사 기록장",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f8f6f1",
+  "theme_color": "#f8f6f1",
+  "lang": "ko",
+  "icons": [{"src":"./icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]
+}
